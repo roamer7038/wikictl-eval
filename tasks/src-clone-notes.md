@@ -1,0 +1,1 @@
+- 知識の置き場: チームの wiki（Markdown の Git リポジトリ）を `{WIKI_DIR}`（環境変数 `WIKI_DIR`）に clone してある。読む前に `git -C "$WIKI_DIR" pull` で最新にし、`rg`・`cat`・`git log` などで読む。書くときは commit して push する。

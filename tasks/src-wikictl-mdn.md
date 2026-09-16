@@ -1,0 +1,1 @@
+- MDN の文書: リポジトリ mdn/content を、CLI の `wikictl` のプロファイル `mdn` で読める（`wikictl --profile mdn <command>`、設定済み）。書き込まない。

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Run every task and condition for the given models and repetitions.
 
-    harness/batch.py --models opus,sonnet,haiku --reps 1 [--label pilot] [--lanes 3]
+    harness/batch.py --models opus,sonnet,haiku --reps 1 [--tasks K1,M1] [--label pilot] [--lanes 3]
+
+Without --tasks, the tasks on real repositories run; the synthetic tasks
+(T1-T4) run only when named.
 
 Groups of one model run one after another in a lane; lanes run at the same
 time. A group whose directory exists is skipped, so a batch can be resumed.
@@ -17,8 +20,9 @@ import threading
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 from run import CONDS, RUNS  # noqa: E402
+from real import TASKS  # noqa: E402
 
-ORDER = ["T1", "T4", "T2", "T3"]
+ORDER = ["K1", "M1", "K3", "M3", "K5", "W"]
 
 
 def main():
@@ -27,6 +31,7 @@ def main():
     ap.add_argument("--reps", type=int, default=1)
     ap.add_argument("--first-rep", type=int, default=1)
     ap.add_argument("--label", default="")
+    ap.add_argument("--tasks", default=",".join(ORDER))
     ap.add_argument("--lanes", type=int, default=3)
     a = ap.parse_args()
     models = a.models.split(",")
@@ -42,8 +47,8 @@ def main():
 
     jobs = {m: [] for m in models}
     for rep in range(a.first_rep, a.first_rep + a.reps):
-        for t in ORDER:
-            for c in CONDS[t]:
+        for t in a.tasks.split(","):
+            for c in (TASKS[t]["conds"] if t in TASKS else CONDS[t]):
                 for m in models:
                     jobs[m].append((t, c, m, rep))
     lanes = [[] for _ in range(a.lanes)]

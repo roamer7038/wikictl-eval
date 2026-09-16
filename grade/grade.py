@@ -66,10 +66,12 @@ def usage(stream):
 
 def by_agent(row):
     """Whether the agent ran the command, rather than Claude Code itself,
-    which runs git for its git status with the caller "claude"."""
+    which runs git for its git status."""
     callers = row.get("callers")
     if callers is not None:
-        return callers.split(",")[0] != "claude"
+        # The Claude Code binary is named claude, or by its version when
+        # started through its real path, as the jail does.
+        return not re.fullmatch(r"claude|\d+\.\d+\.\d+", callers.split(",")[0])
     return not row["argv"].startswith(("git -c core.hooksPath=/dev/null", "git -c core.askPass=",
                                        "git -c core.fsmonitor="))
 
@@ -229,9 +231,99 @@ def grade_incidents(group, meta, t3):
     }
 
 
+def grade_lists(answers_path, qs):
+    """Precision, recall and F1 of each list of names against the answer."""
+    ans, err = load_answers(answers_path)
+    out = {"answers_error": err, "items": {}}
+    for k, q in qs.items():
+        a = ans.get(k) if isinstance(ans, dict) else None
+        if not isinstance(a, list):
+            out["items"][k] = {"verdict": "unknown", "expected": len(q["answer"])}
+            continue
+        got = {norm(x) for x in a if x is not None}
+        want = {norm(x) for x in q["answer"]}
+        tp = len(got & want)
+        p = tp / len(got) if got else (1.0 if not want else 0.0)
+        r = tp / len(want) if want else 1.0
+        out["items"][k] = {"expected": len(want), "tp": tp, "fp": len(got - want), "fn": len(want - got),
+                           "precision": round(p, 3), "recall": round(r, 3),
+                           "f1": round(2 * p * r / (p + r), 3) if p + r else 0.0,
+                           "extra": sorted(got - want), "missing": sorted(want - got)}
+    f1s = [i.get("f1", 0.0) for i in out["items"].values()]
+    out["mean_f1"] = round(sum(f1s) / len(f1s), 3)
+    return out
+
+
+def grade_sets(answers_path, qs):
+    """Status questions of M1: the answer is a set of words."""
+    ans, err = load_answers(answers_path)
+    out = {"answers_error": err, "items": {}}
+    for k, q in qs.items():
+        a = ans.get(k) if isinstance(ans, dict) else None
+        if not isinstance(a, list):
+            v = "unknown"
+        else:
+            got = sorted({norm(x) for x in a if x is not None})
+            if got == sorted(norm(x) for x in q["answer"]):
+                v = "correct"
+            elif q["stale"] is not None and got == sorted(norm(x) for x in q["stale"]):
+                v = "stale"
+            else:
+                v = "wrong"
+        out["items"][k] = {"verdict": v, "answer": a, "category": q.get("category")}
+    return summarize_verdicts(out)
+
+
+def summarize_verdicts(out):
+    vs = [i["verdict"] for i in out["items"].values()]
+    out.update({c: vs.count(c) for c in ("correct", "stale", "unknown", "wrong")})
+    out["total"] = len(vs)
+    by = {}
+    for i in out["items"].values():
+        c = by.setdefault(i.get("category") or "-", {"correct": 0, "total": 0})
+        c["total"] += 1
+        c["correct"] += i["verdict"] == "correct"
+    out["by_category"] = by
+    return out
+
+
+def grade_gate_notes(group, meta, w):
+    remote = os.path.join(group, "remote.git")
+    final = meta["final_commit"]
+    base = w["dir"]
+    try:
+        index = git(remote, "show", f"{final}:{base}/index.md")
+    except subprocess.CalledProcessError:
+        index = ""
+    rows = [l for l in index.splitlines() if l.startswith("|") and "](" in l]
+    names = [re.search(r"\[([^\]]+)\]", r).group(1).strip("`") for r in rows]
+    items = []
+    for g in w["gates"]:
+        try:
+            page = git(remote, "show", f"{final}:{base}/{g['file']}")
+        except subprocess.CalledProcessError:
+            page = None
+        facts = page is not None and all(s["stage"] in page and s["from"] in page for s in g["stages"])
+        items.append({"gate": g["gate"], "agent": g["agent"], "page": page is not None, "page_facts": facts,
+                      "index_rows": names.count(g["gate"])})
+    new = [i for i in items if i["agent"]]
+    return {
+        "expected": len(new),
+        "pages_missing": sum(not i["page"] for i in new),
+        "pages_bad_facts": sum(i["page"] and not i["page_facts"] for i in new),
+        "rows_missing": sum(i["index_rows"] == 0 for i in new),
+        "rows_duplicated": sum(i["index_rows"] > 1 for i in new),
+        "seeded_lost": sum(i["index_rows"] == 0 or not i["page"] for i in items if not i["agent"]),
+        "index_sorted": names == sorted(names) or names == sorted(names, key=str.casefold),
+        "items": items,
+    }
+
+
 def grade_group(group):
     meta = json.load(open(os.path.join(group, "meta.json")))
     task = meta["task"]
+    if task in ("K1", "K3", "K5", "M1", "M3", "W"):
+        return grade_real_group(group, meta)
     data = os.path.join(ROOT, "data", "big" if task == "T4" else "small")
     truth = json.load(open(os.path.join(data, "truth.json")))
     out = {k: meta[k] for k in ("group", "task", "cond", "model", "rep")}
@@ -251,6 +343,37 @@ def grade_group(group):
     else:
         out["quality"] = grade_incidents(group, meta, truth["T3"])
     out["wiki"] = wiki_changes(group, meta)
+    return out
+
+
+def grade_real_group(group, meta):
+    task = meta["task"]
+    truth = json.load(open(os.path.join(ROOT, "data", "real", "truth.json")))
+    out = {k: meta[k] for k in ("group", "task", "cond", "model", "rep")}
+    out["sessions"] = {}
+    for n, sm in meta["sessions"].items():
+        d = os.path.join(group, n)
+        out["sessions"][n] = {"exit": sm["exit"], "timed_out": sm["timed_out"], "wall_ms": sm["wall_ms"],
+                              "usage": usage(os.path.join(d, "stream.jsonl")),
+                              "commands": commands(os.path.join(d, "cmdlog.tsv")),
+                              "tools": tool_calls(os.path.join(d, "stream.jsonl"))}
+    answers = lambda n: os.path.join(group, n, "work", "answers.json")  # noqa: E731
+    if task == "K1":
+        q = grade_values(answers("s1"), truth["K1"])
+        for k, item in q["items"].items():
+            item["category"] = truth["K1"][k]["category"]
+        out["quality"] = summarize_verdicts(q)
+    elif task == "M1":
+        out["quality"] = grade_sets(answers("s1"), truth["M1"])
+    elif task in ("K3", "M3"):
+        out["quality"] = grade_lists(answers("s1"), truth[task])
+    elif task == "K5":
+        out["quality"] = {"s1": grade_lists(answers("s1"), truth["K5"]["s1"]),
+                          "s2": grade_lists(answers("s2"), truth["K5"]["s2"])}
+    else:
+        out["quality"] = grade_gate_notes(group, meta, truth["W"])
+    if "base_commit" in meta:
+        out["wiki"] = wiki_changes(group, meta)
     return out
 
 

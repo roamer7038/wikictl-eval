@@ -1,0 +1,1 @@
+- Kubernetes の文書: リポジトリ kubernetes/website を `{K8S_DIR}`（環境変数 `K8S_DIR`）に clone してある。`rg`・`cat`・`git log` などで読む。書き込まない。

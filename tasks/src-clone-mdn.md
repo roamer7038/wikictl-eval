@@ -1,0 +1,1 @@
+- MDN の文書: リポジトリ mdn/content を `{MDN_DIR}`（環境変数 `MDN_DIR`）に clone してある。`rg`・`cat`・`git log` などで読む。書き込まない。

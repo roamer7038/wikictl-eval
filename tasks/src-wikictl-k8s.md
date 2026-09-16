@@ -1,0 +1,1 @@
+- Kubernetes の文書: リポジトリ kubernetes/website を、CLI の `wikictl` のプロファイル `k8s` で読める（`wikictl --profile k8s <command>`、設定済み）。書き込まない。

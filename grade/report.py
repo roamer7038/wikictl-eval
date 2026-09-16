@@ -85,6 +85,8 @@ def main():
         ]
 
     print("# Results\n")
+    order = ["K1", "M1", "K3", "M3", "K5", "W", "T1", "T4", "T2", "T3"]
+    keys.sort(key=lambda k: (order.index(k[0]) if k[0] in order else 99,) + key({"task": k[0], "cond": k[1], "model": k[2]})[1:])
     for task, title in (("T1", "T1 recall values (72 pages)"), ("T4", "T4 recall values (1,012 pages)")):
         if not rows(task):
             continue
@@ -114,6 +116,54 @@ def main():
         print("Sums over the three agents; 15 incidents expected.\n")
         print(table(rows("T3"), base_cols()[:3] + [
             ("pages missing", lambda r: fmt([g["quality"]["pages_missing"] for g in r[1]], 1)),
+            ("rows missing", lambda r: fmt([g["quality"]["rows_missing"] for g in r[1]], 1)),
+            ("rows duplicated", lambda r: fmt([g["quality"]["rows_duplicated"] for g in r[1]], 1)),
+            ("seeded lost", lambda r: fmt([g["quality"]["seeded_lost"] for g in r[1]], 1)),
+            ("sorted", lambda r: fmt([float(g["quality"]["index_sorted"]) for g in r[1]], 2)),
+            ("lint", lambda r: fmt([len(g["wiki"]["lint"]) for g in r[1]], 0)),
+        ] + base_cols()[3:]))
+        print()
+    for task, title, n in (("K1", "K1 Kubernetes feature gates: recall", 12), ("M1", "M1 MDN page status: recall", 12)):
+        if not rows(task):
+            continue
+        print(f"## {title}\n")
+        cats = sorted({c for _, gs in rows(task) for g in gs for c in g["quality"]["by_category"]})
+        print(table(rows(task), base_cols()[:3] + [
+            (f"correct /{n}", lambda r: fmt([g["quality"]["correct"] for g in r[1]], 1)),
+            ("stale", lambda r: fmt([g["quality"]["stale"] for g in r[1]], 1)),
+            ("unknown", lambda r: fmt([g["quality"]["unknown"] for g in r[1]], 1)),
+            ("wrong", lambda r: fmt([g["quality"]["wrong"] for g in r[1]], 1)),
+        ] + [(f"{c}", (lambda c: lambda r: fmt([g["quality"]["by_category"].get(c, {}).get("correct") for g in r[1]], 1))(c))
+             for c in cats] + base_cols()[3:]))
+        print()
+    for task, title in (("K3", "K3 Kubernetes feature gates: aggregate"), ("M3", "M3 MDN pages: aggregate")):
+        if not rows(task):
+            continue
+        print(f"## {title}\n")
+        items = sorted({k for _, gs in rows(task) for g in gs for k in g["quality"]["items"]})
+        print(table(rows(task), base_cols()[:3] + [
+            ("mean F1", lambda r: fmt([g["quality"]["mean_f1"] for g in r[1]], 2)),
+        ] + [(f"{k} F1", (lambda k: lambda r: fmt([g["quality"]["items"][k].get("f1") for g in r[1]], 2))(k)) for k in items]
+            + base_cols()[3:]))
+        print()
+    if rows("K5"):
+        print("## K5 Kubernetes feature gates: continue in another session\n")
+        print("Session 2 cost and speed; B0 reads the documentation but has no notes wiki.\n")
+        print(table(rows("K5"), base_cols(["s2"])[:3] + [
+            ("s1 F1", lambda r: fmt([g["quality"]["s1"]["mean_f1"] for g in r[1]], 2)),
+            ("s2 mean F1", lambda r: fmt([g["quality"]["s2"]["mean_f1"] for g in r[1]], 2)),
+            ("wiki files", lambda r: fmt([len(g.get("wiki", {}).get("files", [])) for g in r[1]], 0)),
+            ("lint", lambda r: fmt([len(g.get("wiki", {}).get("lint", [])) for g in r[1]], 0)),
+        ] + [(f"s2 {c}", f) for c, f in base_cols(["s2"])[3:]] + [
+            ("s1 USD", lambda r: fmt([speed_cost(g, ["s1"])["usd"] for g in r[1]], 3)),
+        ]))
+        print()
+    if rows("W"):
+        print("## W three agents record feature gates at the same time\n")
+        print("Sums over the three agents; 15 gates expected.\n")
+        print(table(rows("W"), base_cols()[:3] + [
+            ("pages missing", lambda r: fmt([g["quality"]["pages_missing"] for g in r[1]], 1)),
+            ("pages wrong", lambda r: fmt([g["quality"]["pages_bad_facts"] for g in r[1]], 1)),
             ("rows missing", lambda r: fmt([g["quality"]["rows_missing"] for g in r[1]], 1)),
             ("rows duplicated", lambda r: fmt([g["quality"]["rows_duplicated"] for g in r[1]], 1)),
             ("seeded lost", lambda r: fmt([g["quality"]["seeded_lost"] for g in r[1]], 1)),

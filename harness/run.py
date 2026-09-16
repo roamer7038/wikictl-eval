@@ -128,8 +128,9 @@ def command(model, cond, s):
            "--strict-mcp-config", "--max-budget-usd", BUDGET_USD,
            "--settings", json.dumps({"autoMemoryEnabled": False}),
            "--add-dir", s["tmp"]]
-    if "wiki_dir" in s:
-        cmd += ["--add-dir", s["wiki_dir"]]
+    for d in [s.get("wiki_dir")] + s.get("add_dirs", []):
+        if d:
+            cmd += ["--add-dir", d]
     if cond == "B2":
         cmd += ["--plugin-dir", os.path.join(ROOT, "build", "plugin")]
     return cmd
@@ -143,22 +144,54 @@ def environment(s, token):
            "DISABLE_AUTOUPDATER": "1"}
     if "wiki_dir" in s:
         env["WIKI_DIR"] = s["wiki_dir"]
+    env.update(s.get("env", {}))
     return env
+
+
+def jailed(s, argv):
+    """argv run in harness/jail.sh, which sees only the session's group
+    directory (read-write) and the programs and pinned repositories
+    (read-only)."""
+    group = os.path.dirname(s["dir"])
+    ro = [os.path.realpath(shutil.which("claude")), os.path.join(ROOT, "build", "bin", "wikictl"),
+          os.path.join(ROOT, "build", "plugin")]
+    if s.get("needs_remotes"):
+        ro.append(os.path.join(ROOT, "data", "remotes"))
+    # On WSL /etc/resolv.conf links to /mnt/wsl/resolv.conf, which the jail hides.
+    resolv = os.path.realpath("/etc/resolv.conf")
+    if resolv.startswith(("/home/", "/tmp/", "/mnt/")):
+        ro.append(resolv)
+    return ["unshare", "-Urmpf", "--mount-proc", os.path.join(ROOT, "harness", "jail.sh"), s["work"], group, "--",
+            *ro, "--", *argv]
 
 
 def start(model, cond, s, text, token):
     with open(os.path.join(s["dir"], "prompt.md"), "w") as f:
         f.write(text)
-    claude = shutil.which("claude")
+    claude = os.path.realpath(shutil.which("claude"))
     cmd = command(model, cond, s)
     out = open(os.path.join(s["dir"], "stream.jsonl"), "w")
     err = open(os.path.join(s["dir"], "stderr.txt"), "w")
-    p = subprocess.Popen([claude, *cmd[1:]], cwd=s["work"], env=environment(s, token),
+    p = subprocess.Popen(jailed(s, [claude, *cmd[1:]]), cwd=s["work"], env=environment(s, token),
                          stdin=subprocess.PIPE, stdout=out, stderr=err, text=True)
     p.stdin.write(text)
     p.stdin.close()
     return {"proc": p, "cmd": cmd, "started": time.time(),
             "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+
+
+def wait_all(running):
+    """Wait for sessions started at the same time, taking each one's wall time
+    when it ends rather than when the ones before it end."""
+    done = {}
+    while len(done) < len(running):
+        for n, r in running.items():
+            if n in done:
+                continue
+            if r["proc"].poll() is not None or time.time() - r["started"] > SESSION_TIMEOUT:
+                done[n] = wait(r)
+        time.sleep(0.5)
+    return {n: done[n] for n in running}
 
 
 def wait(r):
@@ -179,13 +212,15 @@ def head(remote):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--task", required=True, choices=sorted(CONDS))
+    ap.add_argument("--task", required=True, choices=sorted(CONDS) + sorted(R.TASKS))
     ap.add_argument("--cond", required=True, choices=["B0", "B1", "B2"])
     ap.add_argument("--model", required=True, choices=sorted(MODELS))
     ap.add_argument("--rep", required=True, type=int)
     ap.add_argument("--runs", default=RUNS)
     ap.add_argument("--label", default="", help="suffix of the group name, e.g. pilot")
     a = ap.parse_args()
+    if a.task in R.TASKS:
+        return R.main(a)
     if a.cond not in CONDS[a.task]:
         sys.exit(f"{a.task} is not run under {a.cond}")
     token_file = os.environ.get("EVAL_TOKEN_FILE", os.path.expanduser("~/.config/wikictl-eval/oauth-token"))
@@ -208,8 +243,7 @@ def main():
         prepared = {n: prepare_session(group, a.task, a.cond, n, remote) for n in sessions}
         running = {n: start(a.model, a.cond, prepared[n], prompt(a.task, a.cond, n, prepared[n], truth), token)
                    for n in sessions}
-        for n in sessions:
-            meta["sessions"][n] = wait(running[n])
+        meta["sessions"].update(wait_all(running))
     else:
         for n in sessions:
             s = prepare_session(group, a.task, a.cond, n, remote)
@@ -219,6 +253,9 @@ def main():
     json.dump(meta, open(os.path.join(group, "meta.json"), "w"), ensure_ascii=False, indent=2)
     print(json.dumps({n: {k: v for k, v in m.items() if k != "cmd"} for n, m in meta["sessions"].items()}))
 
+
+sys.path.insert(0, os.path.join(ROOT, "harness"))
+import real as R  # noqa: E402
 
 if __name__ == "__main__":
     main()
