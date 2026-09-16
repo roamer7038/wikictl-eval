@@ -1,0 +1,157 @@
+#!/opt/eval-ext/venv/bin/python
+"""wikictl-search: rank the pages of a wiki for a query in any language.
+
+    wikictl-search [--profile P] [-k N] [--mode hybrid|vector|bm25] [--json] <query> [<path>...]
+
+Prints the best pages under the paths (the whole wiki without paths), one per
+line as "<score><TAB><path><TAB><title>". The index of a commit is built on
+first use from "wikictl snapshot" and kept under
+$XDG_CACHE_HOME/wikictl-search: every page is split into passages of about 800
+characters, embedded with the multilingual model
+paraphrase-multilingual-MiniLM-L12-v2, and counted for BM25. hybrid (the
+default) merges the vector and BM25 ranks by reciprocal rank fusion.
+Prototype for roamer7038/wikictl-eval; not part of wikictl.
+"""
+import argparse
+import hashlib
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from collections import Counter
+
+import numpy as np
+
+MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+PASSAGE = 800
+MAX_PASSAGES = 3
+
+
+def wikictl(profile, *args):
+    cmd = ["wikictl"] + (["--profile", profile] if profile else []) + list(args)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode not in (0, 1):
+        sys.exit(f"wikictl-search: {' '.join(cmd)}: {r.stderr.strip()}")
+    return r.stdout
+
+
+def tokens(text):
+    text = text.lower()
+    words = re.findall(r"[a-z0-9]+", text)
+    cjk = re.findall(r"[぀-ヿ㐀-鿿]+", text)
+    return words + [s[i:i + 2] for s in cjk for i in range(max(1, len(s) - 1))]
+
+
+def split_page(text):
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    front, body = (m.group(1), text[m.end():]) if m else ("", text)
+    title = re.search(r"^title:\s*(.+)$", front, re.M)
+    heading = re.search(r"^#\s+(.+)$", body, re.M)
+    title = (title.group(1) if title else heading.group(1) if heading else "").strip().strip("'\"")
+    body = re.sub(r"\{\{[^}]*\}\}|<!--.*?-->", " ", body, flags=re.S)
+    body = re.sub(r"\s+", " ", body).strip()
+    parts = [body[i:i + PASSAGE] for i in range(0, max(len(body), 1), PASSAGE)][:MAX_PASSAGES]
+    return title, [f"{title}. {p}" for p in parts]
+
+
+def build(profile, cache):
+    from fastembed import TextEmbedding
+    os.makedirs(cache, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        wikictl(profile, "snapshot", os.path.join(tmp, "s"))
+        pages, passages, owners = [], [], []
+        for root, _, files in os.walk(os.path.join(tmp, "s")):
+            for fn in sorted(files):
+                if not fn.endswith(".md"):
+                    continue
+                path = os.path.relpath(os.path.join(root, fn), os.path.join(tmp, "s"))
+                title, parts = split_page(open(os.path.join(root, fn), errors="replace").read())
+                pages.append({"path": path, "title": title, "tokens": Counter(tokens(" ".join(parts)))})
+                passages += parts
+                owners += [len(pages) - 1] * len(parts)
+    model = TextEmbedding(MODEL, cache_dir=os.environ.get("FASTEMBED_CACHE", "/opt/eval-ext/models"))
+    vecs = np.array(list(model.embed(passages, batch_size=64)), dtype=np.float32)
+    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-9
+    np.save(os.path.join(cache, "vectors.npy"), vecs)
+    np.save(os.path.join(cache, "owners.npy"), np.array(owners, dtype=np.int32))
+    with open(os.path.join(cache, "pages.jsonl"), "w") as f:
+        for p in pages:
+            f.write(json.dumps({"path": p["path"], "title": p["title"], "tokens": dict(p["tokens"])}, ensure_ascii=False) + "\n")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="wikictl-search")
+    ap.add_argument("--profile")
+    ap.add_argument("-k", type=int, default=10)
+    ap.add_argument("--mode", choices=["hybrid", "vector", "bm25"], default="hybrid")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--build-only", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("query", nargs="?")
+    ap.add_argument("paths", nargs="*")
+    a = ap.parse_args()
+    log = json.loads(wikictl(a.profile, "--json", "log", "-n", "1") or '{"items": []}')
+    ctx = json.loads(wikictl(a.profile, "--json", "context"))
+    commit = log["items"][0]["commit"] if log["items"] else "empty"
+    key = hashlib.sha1(f"{ctx.get('repo')}\n{commit}".encode()).hexdigest()[:16]
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    cache = os.path.join(base, "wikictl-search", key)
+    if not os.path.exists(os.path.join(cache, "pages.jsonl")):
+        build(a.profile, cache)
+    if a.build_only:
+        return
+    if not a.query:
+        ap.error("a query is required")
+    pages = [json.loads(l) for l in open(os.path.join(cache, "pages.jsonl"))]
+    prefixes = [p.strip("/") + "/" for p in a.paths]
+    keep = [i for i, p in enumerate(pages) if not prefixes or any(p["path"].startswith(x) or p["path"] == x[:-1] for x in prefixes)]
+    ranks = {}
+    if a.mode in ("hybrid", "vector"):
+        from fastembed import TextEmbedding
+        model = TextEmbedding(MODEL, cache_dir=os.environ.get("FASTEMBED_CACHE", "/opt/eval-ext/models"))
+        q = np.array(list(model.embed([a.query])), dtype=np.float32)[0]
+        q /= np.linalg.norm(q) + 1e-9
+        sims = np.load(os.path.join(cache, "vectors.npy")) @ q
+        owners = np.load(os.path.join(cache, "owners.npy"))
+        best = {}
+        for s, o in zip(sims, owners):
+            if o not in best or s > best[o]:
+                best[int(o)] = float(s)
+        order = sorted((i for i in keep if i in best), key=lambda i: -best[i])
+        ranks["vector"] = ({i: r for r, i in enumerate(order)}, best)
+    if a.mode in ("hybrid", "bm25"):
+        qt = tokens(a.query)
+        n = len(pages)
+        df = Counter(t for p in pages for t in set(p["tokens"]) if t in qt)
+        avg = sum(sum(p["tokens"].values()) for p in pages) / max(n, 1)
+        score = {}
+        for i in keep:
+            tf, length = pages[i]["tokens"], sum(pages[i]["tokens"].values())
+            s = sum(math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5)) * tf.get(t, 0) * 2.2 /
+                    (tf.get(t, 0) + 1.2 * (0.25 + 0.75 * length / avg)) for t in qt if tf.get(t))
+            if s > 0:
+                score[i] = s
+        order = sorted(score, key=lambda i: -score[i])
+        ranks["bm25"] = ({i: r for r, i in enumerate(order)}, score)
+    if a.mode == "hybrid":
+        fused = {}
+        for rank, _ in ranks.values():
+            for i, r in rank.items():
+                fused[i] = fused.get(i, 0.0) + 1 / (60 + r)
+        final = sorted(fused, key=lambda i: -fused[i])[:a.k]
+        scores = fused
+    else:
+        rank, scores = ranks[a.mode]
+        final = sorted(rank, key=rank.get)[:a.k]
+    items = [{"score": round(scores[i], 4), "path": pages[i]["path"], "title": pages[i]["title"]} for i in final]
+    if a.json:
+        print(json.dumps({"items": items}, ensure_ascii=False))
+    else:
+        for it in items:
+            print(f"{it['score']}\t{it['path']}\t{it['title']}")
+
+
+if __name__ == "__main__":
+    main()

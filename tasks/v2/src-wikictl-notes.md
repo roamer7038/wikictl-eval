@@ -1,0 +1,1 @@
+- 知識の置き場: チームの wiki（Markdown の Git リポジトリ）を、CLI の `wikictl` のプロファイル `notes` で読み書きできる（`wikictl --profile notes <command>`、設定済み）。

@@ -1,0 +1,1 @@
+- Kubernetes の文書: リポジトリ kubernetes/website を `/docs/k8s-website` に clone してある。`rg`・`cat`・`git log` などで読む。書き込まない。

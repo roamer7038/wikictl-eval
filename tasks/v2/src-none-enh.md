@@ -1,0 +1,1 @@
+- Kubernetes の機能強化の提案（KEP）（kubernetes/enhancements）: 使えない。自分の知識で答える。

@@ -1,0 +1,1 @@
+- Kubernetes の文書（kubernetes/website）: 使えない。自分の知識で答える。

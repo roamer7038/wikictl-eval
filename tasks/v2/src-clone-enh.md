@@ -1,0 +1,1 @@
+- Kubernetes の機能強化の提案（KEP）: リポジトリ kubernetes/enhancements を `/docs/k8s-enhancements` に clone してある。`rg`・`cat`・`git log` などで読む。書き込まない。

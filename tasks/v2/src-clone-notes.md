@@ -1,0 +1,1 @@
+- 知識の置き場: チームの wiki（Markdown の Git リポジトリ）を `/home/agent/wiki` に clone してある。読む前に `git -C /home/agent/wiki pull` で最新にし、`rg`・`cat`・`git log` などで読む。書くときは commit して push する。

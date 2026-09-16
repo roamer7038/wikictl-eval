@@ -67,6 +67,9 @@ def usage(stream):
 def by_agent(row):
     """Whether the agent ran the command, rather than Claude Code itself,
     which runs git for its git status."""
+    if row["argv"].startswith(("git -c core.hooksPath=/dev/null -c core.fsmonitor=", "git -c core.askPass= -c protocol.ext.allow=never",
+                               "git -c core.fsmonitor= -c core.hooksPath=/dev/null")):
+        return False
     callers = row.get("callers")
     if callers is not None:
         # The Claude Code binary is named claude, or by its version when
@@ -128,8 +131,10 @@ def lint(group, remote, paths):
 
 
 def wiki_changes(group, meta):
-    remote = os.path.join(group, "remote.git")
-    base, final = meta["base_commit"], meta["final_commit"]
+    return wiki_changes_repo(os.path.join(group, "remote.git"), meta["base_commit"], meta["final_commit"], group)
+
+
+def wiki_changes_repo(remote, base, final, group):
     if base == final:
         return {"commits": 0, "files": [], "lint": []}
     files = [l.split("\t") for l in git(remote, "diff", "--name-status", "--no-renames", base, final).splitlines()]
@@ -288,7 +293,9 @@ def summarize_verdicts(out):
 
 
 def grade_gate_notes(group, meta, w):
-    remote = os.path.join(group, "remote.git")
+    remote = os.path.join(group, "notes.git")
+    if not os.path.exists(remote):
+        remote = os.path.join(group, "remote.git")
     final = meta["final_commit"]
     base = w["dir"]
     try:

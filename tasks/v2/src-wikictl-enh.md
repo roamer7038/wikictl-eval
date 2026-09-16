@@ -1,0 +1,1 @@
+- Kubernetes の機能強化の提案（KEP）: リポジトリ kubernetes/enhancements を、CLI の `wikictl` のプロファイル `enh` で読める（`wikictl --profile enh <command>`、設定済み）。書き込まない。

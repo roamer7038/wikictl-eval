@@ -1,0 +1,349 @@
+diff --git a/internal/cli/cli.go b/internal/cli/cli.go
+index bcddac6..bd691ca 100644
+--- a/internal/cli/cli.go
++++ b/internal/cli/cli.go
+@@ -14,6 +14,7 @@ import (
+ 	"path/filepath"
+ 	"strconv"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/spf13/pflag"
+ 
+@@ -389,6 +390,7 @@ type app struct {
+ 	stderr  io.Writer
+ 
+ 	// Command flags, registered by the flags function of the command.
++	proto     protoFlags
+ 	linksIn   bool
+ 	linksOut  bool
+ 	long      bool
+@@ -612,10 +614,14 @@ func (a *app) openRepo() error {
+ 		return err
+ 	}
+ 	a.repo = r
+-	if !a.noFetch {
++	// Prototype: $WIKICTL_FETCH_TTL (seconds) skips the fetch before a read
++	// when the last fetch of the mirror ended within that time.
++	ttl, _ := time.ParseDuration(os.Getenv("WIKICTL_FETCH_TTL") + "s")
++	if !a.noFetch && !(ttl > 0 && r.FetchedWithin(ttl)) {
+ 		if err := r.Fetch(); err != nil {
+ 			return err
+ 		}
++		r.MarkFetched()
+ 	}
+ 	return r.Snapshot()
+ }
+diff --git a/internal/cli/cmd_proto.go b/internal/cli/cmd_proto.go
+new file mode 100644
+index 0000000..c9742bd
+--- /dev/null
++++ b/internal/cli/cmd_proto.go
+@@ -0,0 +1,264 @@
++package cli
++
++// Prototype commands for the evaluation in roamer7038/wikictl-eval: meta,
++// log, show and snapshot. They are not part of wikictl.
++
++import (
++	"archive/tar"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"regexp"
++	"strings"
++
++	"github.com/spf13/pflag"
++
++	"github.com/roamer7038/wikictl/internal/wiki"
++)
++
++type protoFlags struct {
++	keys  string
++	max   int
++	since string
++	patch bool
++}
++
++func init() {
++	commands = append(commands,
++		&command{name: "meta", args: "[<path>...]", maxArgs: -1, paths: true,
++			summary: "Print the frontmatter of every page under the paths",
++			detail: `Print the frontmatter of each page (a file ending in .md) under each path, or
++in the whole wiki without paths, reading all of them at once. Each line is
++"<path><TAB><frontmatter as JSON>"; with --keys only the keys listed, separated
++by commas, are printed, and pages that have none of them are left out.
++
++Output: items[] {path, meta}.`,
++			flags: func(a *app, fs *pflag.FlagSet) {
++				fs.StringVar(&a.proto.keys, "keys", "", "comma-separated keys to print")
++			},
++			run: (*app).cmdMeta},
++		&command{name: "log", args: "[<path>...]", maxArgs: -1, paths: true,
++			summary: "Show the commits that changed files",
++			detail: `Show the commits that changed the files under the paths, or the whole wiki,
++newest first, one per line as "<commit><TAB><author date><TAB><commit date><TAB><author><TAB><subject>".
++-n limits the number of commits, --since takes a date such as 2026-01-01, and
++-p adds the patch of each commit, limited to the paths.
++
++Output: items[] {commit, author_date, commit_date, author, subject}; -p is
++text only.`,
++			flags: func(a *app, fs *pflag.FlagSet) {
++				fs.IntVarP(&a.proto.max, "max-count", "n", 0, "show at most this many commits")
++				fs.StringVar(&a.proto.since, "since", "", "show commits more recent than a date")
++				fs.BoolVarP(&a.proto.patch, "patch", "p", false, "show the patch of each commit")
++			},
++			run: (*app).cmdLog},
++		&command{name: "show", args: "<commit> <path>...", minArgs: 2, maxArgs: -1,
++			summary: "Print files as they were at a commit",
++			detail: `Print each file as it was stored at the commit (a sha of at least 7
++characters from log). A path that did not exist at the commit is reported on
++standard error and the command exits with code 1.
++
++Output: items[] {path, content}.`,
++			run: (*app).cmdShow},
++		&command{name: "snapshot", args: "<dir> [<path>...]", minArgs: 1, maxArgs: -1,
++			summary: "Write the files under the paths into a local directory",
++			detail: `Write the files under each path, or the whole wiki, as they are now into the
++local directory dir, which must not exist or be empty, so that local tools
++such as rg can read them. The files are a copy: changes to them are not
++written to the wiki.
++
++Output: {dir, files}.`,
++			run: (*app).cmdSnapshot},
++	)
++}
++
++func (a *app) cmdMeta(c *command, args []string) error {
++	files, err := a.repo.Files(notEmpty(args))
++	if err != nil {
++		return &gitError{err}
++	}
++	var pagesPaths []string
++	for _, f := range files {
++		if isPage(f) {
++			pagesPaths = append(pagesPaths, f)
++		}
++	}
++	pages, err := wiki.ReadPages(a.repo, pagesPaths)
++	if err != nil {
++		return &gitError{err}
++	}
++	var keys []string
++	if a.proto.keys != "" {
++		keys = strings.Split(a.proto.keys, ",")
++	}
++	type item struct {
++		Path string         `json:"path"`
++		Meta map[string]any `json:"meta"`
++	}
++	items := []item{}
++	for _, p := range pagesPaths {
++		fm := pages.Parse(p).Frontmatter
++		if keys != nil {
++			sel := map[string]any{}
++			for _, k := range keys {
++				if v, ok := fm[k]; ok {
++					sel[k] = v
++				}
++			}
++			if len(sel) == 0 {
++				continue
++			}
++			fm = sel
++		}
++		if fm == nil {
++			fm = map[string]any{}
++		}
++		items = append(items, item{p, fm})
++	}
++	a.emit(map[string]any{"items": items}, func(w io.Writer) {
++		for _, it := range items {
++			b, err := json.Marshal(it.Meta)
++			if err != nil {
++				b = []byte(fmt.Sprintf("%q", fmt.Sprint(it.Meta)))
++			}
++			fmt.Fprintf(w, "%s\t%s\n", escapeControl(it.Path), b)
++		}
++	})
++	return nil
++}
++
++func (a *app) cmdLog(c *command, args []string) error {
++	if a.repo.Head() == "" {
++		return nil
++	}
++	gitArgs := []string{"log", "--format=%x01%H%x09%as%x09%cs%x09%an%x09%s"}
++	if a.proto.max > 0 {
++		gitArgs = append(gitArgs, fmt.Sprintf("-n%d", a.proto.max))
++	}
++	if a.proto.since != "" {
++		gitArgs = append(gitArgs, "--since="+a.proto.since)
++	}
++	if a.proto.patch && !a.json {
++		gitArgs = append(gitArgs, "-p")
++	}
++	gitArgs = append(gitArgs, a.repo.Head(), "--")
++	gitArgs = append(gitArgs, notEmpty(args)...)
++	out, err := a.repo.Git(gitArgs...)
++	if err != nil {
++		return &gitError{err}
++	}
++	type item struct {
++		Commit     string `json:"commit"`
++		AuthorDate string `json:"author_date"`
++		CommitDate string `json:"commit_date"`
++		Author     string `json:"author"`
++		Subject    string `json:"subject"`
++	}
++	items := []item{}
++	for _, rec := range strings.Split(out, "\x01") {
++		line, _, _ := strings.Cut(rec, "\n")
++		f := strings.SplitN(line, "\t", 5)
++		if len(f) == 5 {
++			items = append(items, item{f[0], f[1], f[2], f[3], f[4]})
++		}
++	}
++	a.emit(map[string]any{"items": items}, func(w io.Writer) {
++		io.WriteString(w, strings.ReplaceAll(out, "\x01", ""))
++	})
++	return nil
++}
++
++var commitRe = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
++
++func (a *app) cmdShow(c *command, args []string) error {
++	rev := args[0]
++	if !commitRe.MatchString(rev) {
++		return &usageError{c, "not a commit sha: " + rev}
++	}
++	type item struct {
++		Path    string `json:"path"`
++		Content string `json:"content"`
++	}
++	items := []item{}
++	var missing []string
++	for _, p := range args[1:] {
++		p = strings.TrimPrefix(filepath.Clean("/"+p), "/")
++		out, err := a.repo.Git("show", rev+":"+p)
++		if err != nil {
++			missing = append(missing, p)
++			continue
++		}
++		items = append(items, item{p, out})
++	}
++	a.emit(map[string]any{"items": items}, func(w io.Writer) {
++		for _, it := range items {
++			io.WriteString(w, it.Content)
++		}
++	})
++	return a.reportMissing(missing, func(string) string { return "no such file at " + rev })
++}
++
++func (a *app) cmdSnapshot(c *command, args []string) error {
++	dir := args[0]
++	if ents, err := os.ReadDir(dir); err == nil && len(ents) > 0 {
++		return &usageError{c, "directory is not empty: " + dir}
++	}
++	if err := os.MkdirAll(dir, 0o755); err != nil {
++		return err
++	}
++	paths := notEmpty(args[1:])
++	for i, p := range paths {
++		paths[i] = strings.TrimPrefix(filepath.Clean("/"+p), "/")
++	}
++	pr, pw := io.Pipe()
++	done := make(chan error, 1)
++	go func() { done <- a.repo.Archive(pw, paths); pw.Close() }()
++	n := 0
++	tr := tar.NewReader(pr)
++	for {
++		h, err := tr.Next()
++		if errors.Is(err, io.EOF) {
++			break
++		}
++		if err != nil {
++			pr.CloseWithError(err)
++			<-done
++			return err
++		}
++		name := filepath.Clean(h.Name)
++		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, "../") {
++			continue
++		}
++		target := filepath.Join(dir, name)
++		switch h.Typeflag {
++		case tar.TypeDir:
++			os.MkdirAll(target, 0o755)
++		case tar.TypeReg:
++			os.MkdirAll(filepath.Dir(target), 0o755)
++			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
++			if err != nil {
++				return err
++			}
++			_, err = io.Copy(f, tr)
++			f.Close()
++			if err != nil {
++				return err
++			}
++			n++
++		}
++	}
++	// The archive ends with padding after the end-of-archive marker, which
++	// git still writes: read it, or git blocks on the pipe.
++	io.Copy(io.Discard, pr)
++	if err := <-done; err != nil {
++		return &gitError{err}
++	}
++	abs, _ := filepath.Abs(dir)
++	a.emit(map[string]any{"dir": abs, "files": n}, func(w io.Writer) {
++		fmt.Fprintf(w, "%s\t%d files\n", escapeControl(abs), n)
++	})
++	return nil
++}
+diff --git a/internal/repo/proto.go b/internal/repo/proto.go
+new file mode 100644
+index 0000000..83c0ebe
+--- /dev/null
++++ b/internal/repo/proto.go
+@@ -0,0 +1,37 @@
++package repo
++
++import (
++	"io"
++	"os"
++	"path/filepath"
++	"time"
++)
++
++// Head returns the commit that the reads of r use, or "" before Snapshot or
++// when the branch does not exist.
++func (r *Repo) Head() string { return r.snapshot }
++
++// Archive writes a tar archive of the files under paths (the whole tree
++// without paths) at the commit of Head to w.
++func (r *Repo) Archive(w io.Writer, paths []string) error {
++	args := append([]string{"archive", "--format=tar", r.snapshot}, pathspec(paths)...)
++	c := r.command(nil, args)
++	c.Stdout = w
++	c.Stderr = io.Discard
++	return c.Run()
++}
++
++// FetchedWithin reports whether the last Fetch recorded by MarkFetched ended
++// less than ttl ago.
++func (r *Repo) FetchedWithin(ttl time.Duration) bool {
++	st, err := os.Stat(filepath.Join(r.Dir, "wikictl-fetched"))
++	return err == nil && time.Since(st.ModTime()) < ttl
++}
++
++// MarkFetched records the time of a successful Fetch.
++func (r *Repo) MarkFetched() {
++	p := filepath.Join(r.Dir, "wikictl-fetched")
++	if f, err := os.Create(p); err == nil {
++		f.Close()
++	}
++}

@@ -1,0 +1,47 @@
+{
+  "model": "claude-opus-5",
+  "k8s": [
+    {
+      "gate": "AppArmor",
+      "text": "Turns on support for confining pods with the Linux kernel security module that enforces per-program access profiles, available on nodes that run Linux. The project's security tutorials cover how to set this up."
+    },
+    {
+      "gate": "AnonymousAuthConfigurableEndpoints",
+      "text": "Lets administrators specify which particular API server paths may be reached without authenticating, rather than allowing unauthenticated access everywhere it would otherwise apply."
+    },
+    {
+      "gate": "StructuredAuthenticationConfiguration",
+      "text": "Lets the cluster's main API endpoint use a file-based, structured format to define how user identity is verified. See the authentication reference documentation on setting up that server for details."
+    },
+    {
+      "gate": "HugepageAwareEviction",
+      "text": "When enabled, the kubelet leaves out memory set aside for huge pages when it works out how much free memory a node still has for eviction decisions. Otherwise that reserved memory counts as free, so the node looks like it has more headroom than it really does and workloads can be killed by the kernel before eviction ever starts."
+    },
+    {
+      "gate": "LoadBalancerIPMode",
+      "text": "Lets you configure how the assigned address is treated in the reported state of a service exposed through a load balancer. The Kubernetes networking documentation covers this address mode setting in detail."
+    }
+  ],
+  "k8s_ja": [
+    {
+      "gate": "CloudDualStackNodeIPs",
+      "text": "外部のクラウド事業者を使っている環境でも、kubeletの起動オプションでノードのIPアドレスをIPv4とIPv6の両方指定できるようにする機能です。これが有効だと、そうした環境でも両方のプロトコルを併用する構成が組めます。"
+    },
+    {
+      "gate": "ServiceAccountTokenPodNodeInfo",
+      "text": "Pod に結び付いたサービスアカウント用のトークンを API サーバーが発行する際に、その Pod が載っているノードの名前と UID をトークンの中に併せて入れるかどうかを切り替えるものです。オフなら従来どおりノードの情報は含まれません。"
+    },
+    {
+      "gate": "StatefulSetRecreateStrategy",
+      "text": "ステートフルセットの更新方式として、既存のPodをいったん全部消してから新しいPodを作り直すやり方を使えるようにするものです。テンプレート部分への変更を、順番に入れ替えるのではなく一斉に作り直して反映させたいときに使います。"
+    },
+    {
+      "gate": "DRAPrioritizedList",
+      "text": "リソースの要求に対して、第一候補のデバイスが確保できなかった場合に代わりに使ってよいデバイスを、優先順位を付けた一覧として書けるようにする機能です。これにより、希望どおりのデバイスが空いていなくても、次善の選択肢で割り当てを成立させられます。"
+    },
+    {
+      "gate": "UserNamespacesHostNetworkSupport",
+      "text": "これを有効にすると、Pod がホストのネットワークをそのまま使いながら、同時にユーザー名前空間も併用できるようになります。つまり、これまで同時には指定できなかった両方の設定を、一つの Pod で組み合わせられるということです。"
+    }
+  ]
+}
