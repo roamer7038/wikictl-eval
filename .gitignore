@@ -1,0 +1,5 @@
+build/
+data/
+runs/
+results/raw/
+__pycache__/
