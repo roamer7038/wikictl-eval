@@ -39,6 +39,7 @@ pin() {
 mkdir -p data/remotes
 pin k8s-website https://github.com/kubernetes/website.git aa4e9e6dee49106155072a44ef997b91722243ec
 pin mdn-content https://github.com/mdn/content.git 8e307de115d41e9214fcacbd7fe89532756816b4
+pin k8s-enhancements https://github.com/kubernetes/enhancements.git 766deac551650361954ac2f307f9babcdd943b19
 python3 gen/real.py
 
 {
@@ -46,7 +47,7 @@ python3 gen/real.py
   echo "plugin	$PLUGIN_REF	$(git -C build/plugin rev-parse HEAD)"
   echo "claude	$(claude --version | head -1)"
   for n in small big; do echo "wiki-$n	$(git -C data/$n/wiki.git rev-parse HEAD)"; done
-  for n in k8s-website mdn-content; do echo "$n	$(git -C data/remotes/$n.git rev-parse HEAD)"; done
+  for n in k8s-website k8s-enhancements mdn-content; do echo "$n	$(git -C data/remotes/$n.git rev-parse HEAD)"; done
   echo "notes-wiki	$(git -C data/real/notes-wiki.git rev-parse HEAD)"
 } | tee build/versions.tsv
 build/bin/wikictl version
