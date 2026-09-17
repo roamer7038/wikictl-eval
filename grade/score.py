@@ -36,6 +36,16 @@ def norm(v):
     return G.norm(v)
 
 
+ACCEPT_ALTERNATIVES = False
+
+
+def f1_of(got, want):
+    tp = len(got & want)
+    p = tp / len(got) if got else float(not want)
+    r = tp / len(want) if want else 1.0
+    return 2 * p * r / (p + r) if p + r else 0.0
+
+
 def score_question(q, a):
     t = q["type"]
     if t == "value":
@@ -69,7 +79,8 @@ def score_question(q, a):
     if not isinstance(a, list):
         return {"verdict": "wrong", "score": 0.0}
     got = {norm(x) for x in a if x is not None}
-    want = {norm(x) for x in q["answer"]}
+    answers = [q["answer"]] + (q.get("alternatives", []) if ACCEPT_ALTERNATIVES else [])
+    want = max(({norm(x) for x in ans} for ans in answers), key=lambda w: f1_of(got, w))
     tp = len(got & want)
     p = tp / len(got) if got else float(not want)
     r = tp / len(want) if want else 1.0
@@ -361,7 +372,14 @@ def score_group(group):
 
 
 def main():
-    for g in sys.argv[1:]:
+    global ACCEPT_ALTERNATIVES
+    args = sys.argv[1:]
+    if args and args[0] == "--accept-alternatives":
+        # Also accept the alternative answers of a question (P3K), as a
+        # sensitivity check on how the question was worded.
+        ACCEPT_ALTERNATIVES = True
+        args = args[1:]
+    for g in args:
         if os.path.exists(os.path.join(g, "meta.json")):
             print(json.dumps(score_group(os.path.abspath(g)), ensure_ascii=False))
 

@@ -371,6 +371,24 @@ def task_p8(k, rng):
     return {"decisions": decisions, "s1": s1, "s2": s2}
 
 
+def p3k_with_alternatives(k, qs):
+    """P3K asks which gates "entered" beta in 1.37 and stable in 1.36. The
+    answer counts every stage starting then; a reading that leaves out gates
+    already in that stage before (only the default changed) is also given as
+    an alternative, used by grade/score.py --accept-alternatives."""
+    def transitions(stage, version):
+        out = []
+        for n, g in k.en.items():
+            st = g["stages"]
+            for i, s in enumerate(st):
+                if s["stage"] == stage and s["from"] == version and (i == 0 or st[i - 1]["stage"] != stage):
+                    out.append(n)
+        return sorted(set(out))
+    qs["q01"]["alternatives"] = [transitions("beta", "1.37")]
+    qs["q02"]["alternatives"] = [transitions("stable", "1.36")]
+    return qs
+
+
 def main():
     rng = random.Random(SEED)
     for repo, r in REPOS.items():
@@ -384,7 +402,7 @@ def main():
         "L1": {"sources": ["k8s"], "questions": task_l1(k, rng, old["K1"])},
         "L2": {"sources": ["mdn"], "questions": task_l2(m, rng, old["M1"])},
         "P2": {"sources": ["k8s"], "questions": task_p2(k, rng)},
-        "P3K": {"sources": ["k8s"], "questions": number([dict(v, type="list") for v in old["K3"].values()])},
+        "P3K": {"sources": ["k8s"], "questions": p3k_with_alternatives(k, number([dict(v, type="list") for v in old["K3"].values()]))},
         "P3M": {"sources": ["mdn"], "questions": number([dict(v, type="list") for v in old["M3"].values()])},
         "P4": {"sources": ["k8s", "mdn"], "questions": task_p4(k, m, rng)},
         "P5": {"sources": ["k8s"], "questions": task_p5(k, rng, paraphrases)},
