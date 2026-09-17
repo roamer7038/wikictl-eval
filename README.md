@@ -4,7 +4,7 @@
 
 Tasks, environment and graders that measure how much [wikictl](https://github.com/roamer7038/wikictl) changes the quality, cost and delivery time (QCD) of an agent's work. The purpose and the decisions the results feed are in [roamer7038/wikictl#184](https://github.com/roamer7038/wikictl/issues/184).
 
-- Results: [results/main.md](results/main.md) (main run, 2026-09-17, in Japanese)
+- Results: [results/main.md](results/main.md) (main run, 2026-09-17) and a paper-style report [results/report.md](results/report.md), both in Japanese
 
 ## Questions
 
@@ -91,7 +91,10 @@ harness/eval.py run --task P3K --cond B2-lean --model sonnet --rep 1          # 
 harness/eval.py batch --tasks L1,L2,P2,P3K,P3M,P4,P5,P6,P7,P8,P9 \
   --conds B0,B1,B2,B2-best,B2-lean --models opus,sonnet,haiku --reps 3 --label main
 grade/score.py ../wikictl-eval-runs/*-main > results/main-scores.jsonl
-grade/qcd.py results/main-scores.jsonl > results/main-qcd.md
+grade/score.py --accept-alternatives ../wikictl-eval-runs/*-main > results/main-scores-alt.jsonl
+grade/summary.py results/main-scores-alt.jsonl results/main-scores.jsonl > results/main-tables.md
+grade/qcd.py results/main-scores-alt.jsonl > results/main-qcd.md
+grade/models.py results/main-scores.jsonl results/main-scores-alt.jsonl > results/model-cost.md
 ```
 
 Groups are written to `../wikictl-eval-runs/` (or `$EVAL_RUNS`), outside any Git repository, because Claude Code puts the git status of an enclosing repository into the system prompt. The directory keeps the transcripts, and the agent containers receive the authentication token, so do not publish it.

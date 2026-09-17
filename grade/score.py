@@ -15,6 +15,7 @@ One JSON object per group with:
             into programs (wikictl subcommands separately), each with its
             count, seconds and output bytes
 """
+import collections
 import json
 import os
 import re
@@ -207,7 +208,7 @@ FEATURES = {
 
 VIOLATIONS = {
     # Reading the documentation or the wiki around wikictl, which B2 forbids.
-    "wikictl_mirror": re.compile(r"\.cache/wikictl\b|GIT_DIR="),
+    "wikictl_mirror": re.compile(r"\.cache/wikictl/[^\n]*\bgit\b|\bgit\b[^\n]*\.cache/wikictl/|GIT_DIR="),
     "direct_git_remote": re.compile(r"\bgit\s+(-C\s+\S+\s+)?clone\b|git://"),
     "network": re.compile(r"\b(curl|wget)\b"),
 }
@@ -313,6 +314,28 @@ def executions(group, meta):
     return out
 
 
+def used_features(group, meta, sessions):
+    """Successful runs of each prototype command (from the wrappers' logs,
+    exit code 0), runs of wikictl-search named as a program in a Bash
+    command, and the Bash commands using --no-fetch or passing many paths
+    through xargs."""
+    out = collections.Counter()
+    for n in meta["sessions"]:
+        path = os.path.join(group, n, "log", "cmdlog.tsv")
+        if os.path.exists(path):
+            for row in G.csv.DictReader(open(path), delimiter="\t", quoting=G.csv.QUOTE_NONE):
+                if not G.by_agent(row) or row["exit"] != "0":
+                    continue
+                prog = (programs(row["argv"]) or ["?"])[0]
+                if prog in ("wikictl meta", "wikictl log", "wikictl show", "wikictl snapshot"):
+                    out[prog.split()[1]] += 1
+    for s in sessions.values():
+        out["search"] += s["programs"].get("wikictl-search", {}).get("calls", 0)
+        out["no_fetch"] += s["features"].get("no_fetch", 0)
+        out["many_paths"] += s["features"].get("many_paths", 0)
+    return dict(out)
+
+
 def result_event(stream):
     res = None
     for line in open(stream):
@@ -364,6 +387,7 @@ def score_group(group):
                           else max(s["wall_s"] for s in sessions.values()), 1)
     out["tool_calls"] = sum(s["tool_calls"] for s in sessions.values())
     out["executions"] = executions(group, meta)
+    out["features"] = used_features(group, meta, sessions)
     out["violations"] = {}
     for s in sessions.values():
         for k, v in s["violations"].items():

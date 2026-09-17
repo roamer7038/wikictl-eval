@@ -328,14 +328,21 @@ def task_p7(k, e):
             rows[sig]["mismatch"].append(n)
         if kep.get("stage") == "stable" and not any(s["stage"] == "stable" for s in k.en[n]["stages"]):
             rows[sig]["missing"].append(n)
+    # Gates whose KEP is stable but which have no page on the website at all
+    # can also be read as having "no stable stage on the page".
+    no_page = collections.defaultdict(list)
+    for n, ps in e.by_gate.items():
+        if len(ps) == 1 and n not in k.en and re.fullmatch(r"[A-Za-z0-9]+", n) and e.keps[ps[0]].get("stage") == "stable":
+            no_page[e.keps[ps[0]].get("owning-sig")].append(n)
     sig_m = max((s for s in rows if 3 <= len(rows[s]["mismatch"]) <= 12), key=lambda s: (len(rows[s]["mismatch"]), s))
     sig_s = max((s for s in rows if s != sig_m and 2 <= len(rows[s]["missing"]) <= 12), key=lambda s: (len(rows[s]["missing"]), s))
     rule = "（対象は、kubernetes/enhancements の kep.yaml の feature-gates にその名前を挙げる KEP がちょうど 1 つの feature gate に限る）"
     return number([
         listq(f"owning-sig が `{sig_m}` の KEP の feature gate のうち、KEP の milestone.stable の版と、kubernetes/website の feature gate のページで stable の段階が始まる版が異なるもの{rule}",
               rows[sig_m]["mismatch"], category="join_mismatch"),
-        listq(f"owning-sig が `{sig_s}` の KEP の feature gate のうち、KEP の stage が stable なのに、kubernetes/website の feature gate のページに stable の段階がないもの{rule}",
-              rows[sig_s]["missing"], category="join_missing"),
+        dict(listq(f"owning-sig が `{sig_s}` の KEP の feature gate のうち、KEP の stage が stable なのに、kubernetes/website の feature gate のページに stable の段階がないもの{rule}",
+                   rows[sig_s]["missing"], category="join_missing"),
+             alternatives=[sorted(rows[sig_s]["missing"] + no_page[sig_s])]),
     ])
 
 

@@ -4,7 +4,7 @@
 
 [wikictl](https://github.com/roamer7038/wikictl) が、エージェントの作業の品質・費用・速度（QCD）をどれだけ変えるかを測るための課題、実行環境、採点のスクリプト。目的と判断事項は [roamer7038/wikictl#184](https://github.com/roamer7038/wikictl/issues/184) にある。
 
-- 結果: [results/main.md](results/main.md)（本番、2026-09-17）
+- 結果: [results/main.md](results/main.md)（本番、2026-09-17）、論文形式のまとめ [results/report.md](results/report.md)
 
 ## 問い
 
@@ -91,7 +91,10 @@ harness/eval.py run --task P3K --cond B2-lean --model sonnet --rep 1          # 
 harness/eval.py batch --tasks L1,L2,P2,P3K,P3M,P4,P5,P6,P7,P8,P9 \
   --conds B0,B1,B2,B2-best,B2-lean --models opus,sonnet,haiku --reps 3 --label main
 grade/score.py ../wikictl-eval-runs/*-main > results/main-scores.jsonl
-grade/qcd.py results/main-scores.jsonl > results/main-qcd.md
+grade/score.py --accept-alternatives ../wikictl-eval-runs/*-main > results/main-scores-alt.jsonl
+grade/summary.py results/main-scores-alt.jsonl results/main-scores.jsonl > results/main-tables.md
+grade/qcd.py results/main-scores-alt.jsonl > results/main-qcd.md
+grade/models.py results/main-scores.jsonl results/main-scores-alt.jsonl > results/model-cost.md
 ```
 
 グループは `../wikictl-eval-runs/`（または `$EVAL_RUNS`）に書く。Claude Code は上位のディレクトリにある Git リポジトリの git status をシステムプロンプトに入れるので、どの Git リポジトリの中でもない場所にする。このディレクトリにはトランスクリプトが残り、被験のコンテナには認証トークンが渡るので、公開しない。

@@ -71,6 +71,9 @@ def by_agent(row):
                                "git -c core.fsmonitor= -c core.hooksPath=/dev/null")):
         return False
     callers = row.get("callers")
+    if callers is not None and callers.split(",")[0] == "wikictl-search":
+        # wikictl run by the search extension to build its index.
+        return False
     if callers is not None:
         # The Claude Code binary is named claude, or by its version when
         # started through its real path, as the jail does.
