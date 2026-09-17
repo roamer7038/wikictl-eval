@@ -188,7 +188,8 @@ def main():
         print(f"| {r[0]} | {a:.2f} | {r[2]['haiku']['p']:.2f} | {b:.2f} | {c:.2f} | {usd(e, 2)} | {usd(so, 2)} |")
     print()
 
-    print("## 5. 条件ごと（3 回）\n")
+    qdc(pooled)
+    print("## 6. 条件ごと（3 回）\n")
     print("成功 1 回あたり USD（O / S / H）と最安のモデル。3 回だけなので、成功率は 0、0.33、0.67、1 のいずれか。\n")
     conds = ["B0"] + POOL
     print("| 課題 | " + " | ".join(conds) + " |")
@@ -207,19 +208,51 @@ def main():
         sensitivity(strict, alt)
 
 
+def qdc(pooled):
+    """Quality, delivery and cost per task, and which models are not beaten
+    on all three at once."""
+    print("## 5. 品質・時間・費用（4 条件を合わせた 12 回）\n")
+    print("成功 1 回あたりの分 = 1 回の平均の実時間 ÷ 成功率。パレートは、成功率・成功 1 回あたりの分・"
+          "成功 1 回あたりの USD の 3 つすべてで他のモデルに劣ってはいないモデル。\n")
+    print("| 課題 | 成功率（O / S / H） | 成功 1 回あたりの分（O / S / H） | 成功 1 回あたり USD（O / S / H） | Q 最高 | D 最速 | C 最安 | パレート |")
+    print("|---|---|---|---|---|---|---|---|")
+    order = sorted(TASKS, key=lambda t: -st.mean(pooled[(t, m)]["p"] for m in MODELS))
+    tally = collections.Counter()
+    for t in order:
+        d = {m: pooled[(t, m)] for m in MODELS}
+        ets = {m: (d[m]["min"] / d[m]["p"] if d[m]["p"] else math.inf) for m in MODELS}
+        bestq = max(d[m]["p"] for m in MODELS)
+        q = [m for m in MODELS if d[m]["p"] == bestq]
+        dbest = [m for m in MODELS if ets[m] == min(ets.values())]
+        cbest = [m for m in MODELS if d[m]["ecs"] == min(d[x]["ecs"] for x in MODELS)]
+        pareto = [m for m in MODELS if not any(
+            x != m and d[x]["p"] >= d[m]["p"] and ets[x] <= ets[m] and d[x]["ecs"] <= d[m]["ecs"]
+            and (d[x]["p"] > d[m]["p"] or ets[x] < ets[m] or d[x]["ecs"] < d[m]["ecs"]) for x in MODELS)]
+        for m in pareto:
+            tally[m] += 1
+        f = lambda key, dd=2: " / ".join(usd(key[m], dd) for m in MODELS)  # noqa: E731
+        print(f"| {t} | " + " / ".join(f"{d[m]['p']:.2f}" for m in MODELS) + " | " + f(ets, 1) + " | "
+              + " / ".join(usd(d[m]["ecs"], 2) for m in MODELS) + f" | {'・'.join(q)} | {'・'.join(dbest)} | "
+              + f"{'・'.join(cbest)} | {'・'.join(pareto)} |")
+    print()
+    print("パレートに残った課題の数（11 課題中）: " + "、".join(f"{m} {tally[m]}" for m in MODELS) + "。\n")
+
+
 def sensitivity(cells, alt):
-    print("## 6. 問題文の解釈による違い（P3K）\n")
-    print("P3K の「v1.37 で beta の段階に入った」「v1.36 で stable の段階に入った」は、その版から始まる段をすべて数える"
-          "（正解）と、前の段が同じ段階のもの（既定値が変わっただけのもの）を除く、の 2 通りに読める。"
-          "Opus は 12 回中 11 回で後者の読み方をとり、F1 0.94〜0.97 で成功の閾値 0.95 を下回った。"
-          "後者も正答とした採点（`grade/score.py --accept-alternatives`）での値を並べる。\n")
+    print("## 7. 問題文の解釈による違い（P3K・P7）\n")
+    print("2 つの問いが 2 通りに読める。P3K の「v1.37 で beta の段階に入った」は、その版から始まる段をすべて数える"
+          "（正解）か、前の段が同じ段階のもの（既定値が変わっただけのもの）を除くか。Opus は 12 回中 11 回で後者の"
+          "読み方をとり、F1 0.94〜0.97 で成功の閾値 0.95 を下回った。P7 の 2 問目の「ページに stable の段階がないもの」は、"
+          "ページ自体がない gate を含むかどうかで、Sonnet の失敗 4 回はこれによる。"
+          "どちらの読み方も正答とした採点（`grade/score.py --accept-alternatives`）での値を並べる。\n")
     overall_rows(cells, "正解のみ")
     overall_rows(alt, "両方の読み方を正答")
     print("| 課題 | 読み方 | 成功率（O / S / H） | 成功 1 回あたり USD（O / S / H） | 最安 |")
     print("|---|---|---|---|---|")
-    for name, cs in (("正解のみ", cells), ("両方を正答", alt)):
-        ps = {m: summary([a for c in POOL for a in cs.get(("P3K", c, m), [])]) for m in MODELS}
-        print(f"| P3K | {name} | " + " / ".join(f"{ps[m]['p']:.2f}" for m in MODELS) + " | "
+    for t in ("P3K", "P7"):
+      for name, cs in (("正解のみ", cells), ("両方を正答", alt)):
+        ps = {m: summary([a for c in POOL for a in cs.get((t, c, m), [])]) for m in MODELS}
+        print(f"| {t} | {name} | " + " / ".join(f"{ps[m]['p']:.2f}" for m in MODELS) + " | "
               + " / ".join(usd(ps[m]['ecs'], 2) for m in MODELS) + f" | {cheapest(ps)} |")
     print()
 
